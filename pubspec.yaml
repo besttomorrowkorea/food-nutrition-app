@@ -1,0 +1,26 @@
+name: food_nutrition_app
+description: 음식 사진으로 영양소를 분석하는 앱
+
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  image_picker: ^1.0.7
+  cloud_functions: ^5.0.4
+  firebase_core: ^3.1.0
+  http: ^1.2.1
+  image: ^4.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
