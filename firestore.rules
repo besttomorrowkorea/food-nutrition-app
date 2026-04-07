@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── 헬퍼 함수 ───────────────────────────────────────────────
+
+    // 인증된 사용자인지 확인
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // 본인 문서인지 확인
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // 유료 사용자인지 확인 (RevenueCat 웹훅이 Firestore에 기록)
+    function isPremium(userId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/subscriptions/$(userId)) &&
+        get(/databases/$(database)/documents/subscriptions/$(userId)).data.tier == 'premium';
+    }
+
+    // ─── 사용자 프로필 ─────────────────────────────────────────
+    match /users/{userId} {
+      allow read, write: if isAuth() && isOwner(userId);
+
+      // 일일 사용량 (Cloud Function이 기록)
+      match /usage/{date} {
+        allow read: if isAuth() && isOwner(userId);
+        allow write: if false; // Cloud Function만 기록 가능
+      }
+    }
+
+    // ─── 구독 정보 (RevenueCat 웹훅 → Admin SDK만 기록) ────────
+    match /subscriptions/{userId} {
+      allow read: if isAuth() && isOwner(userId);
+      allow write: if false; // Admin SDK (Cloud Function)만 쓰기 가능
+    }
+
+    // ─── 영양 기록 ─────────────────────────────────────────────
+    match /nutrition_records/{recordId} {
+      // 7일치는 무료, 그 이상은 유료
+      allow read: if isAuth() &&
+        resource.data.userId == request.auth.uid &&
+        (
+          isPremium(request.auth.uid) ||
+          resource.data.date >= timestamp.date(
+            int(string(request.time.toMillis() / 1000 - 7 * 86400).split('.')[0]),
+            1, 1  // 근사치: 실제 7일 계산은 Cloud Function에서 처리
+          )
+        );
+      allow create: if isAuth() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuth() && resource.data.userId == request.auth.uid;
+    }
+
+    // ─── 일별 영양 요약 (Cloud Function이 집계) ───────────────
+    match /daily_summaries/{summaryId} {
+      allow read: if isAuth() &&
+        resource.data.userId == request.auth.uid &&
+        isPremium(request.auth.uid);
+      allow write: if false; // Cloud Function만 기록
+    }
+
+    // ─── 인바디 기록 (유료 전용) ───────────────────────────────
+    match /inbody_records/{recordId} {
+      allow read, write: if isAuth() &&
+        (resource == null || resource.data.userId == request.auth.uid) &&
+        isPremium(request.auth.uid);
+    }
+
+    // ─── 건강 목표 (유료 전용) ─────────────────────────────────
+    match /goals/{goalId} {
+      allow read, write: if isAuth() &&
+        (resource == null || resource.data.userId == request.auth.uid) &&
+        isPremium(request.auth.uid);
+    }
+
+    // ─── 채팅 기록 (유료: Firestore 저장, 무료: 저장 안 함) ───
+    match /chat_sessions/{sessionId} {
+      allow read, write: if isAuth() &&
+        (resource == null || resource.data.userId == request.auth.uid) &&
+        isPremium(request.auth.uid);
+    }
+  }
+}
