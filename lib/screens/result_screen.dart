@@ -1,8 +1,14 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/nutrition_result.dart';
+import '../models/nutrition_record.dart';
+import '../providers/providers.dart';
+import '../providers/subscription_provider.dart';
+import 'paywall_screen.dart';
 
-class ResultScreen extends StatelessWidget {
+class ResultScreen extends ConsumerStatefulWidget {
   final NutritionResult result;
   final File imageFile;
 
@@ -11,6 +17,79 @@ class ResultScreen extends StatelessWidget {
     required this.result,
     required this.imageFile,
   });
+
+  @override
+  ConsumerState<ResultScreen> createState() => _ResultScreenState();
+}
+
+class _ResultScreenState extends ConsumerState<ResultScreen> {
+  NutritionResult get result => widget.result;
+  File get imageFile => widget.imageFile;
+  String _selectedMealType = 'lunch';
+  bool _isSaving = false;
+  bool _saved = false;
+
+  Future<void> _saveRecord() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    // 7일 무료 기록 체크 — 프리미엄이 아니면 페이월
+    final sub = ref.read(subscriptionProvider);
+    if (!sub.isPremium) {
+      // 무료 사용자: 최근 7일간 기록 수 확인
+      final repo = ref.read(nutritionRepositoryProvider);
+      final weekAgo = DateTime.now().subtract(const Duration(days: 7));
+      final recent = await repo.getRecordsByDateRange(uid, weekAgo, DateTime.now());
+
+      if (recent.length >= 21) {
+        // 7일간 21건(하루 3끼) 이상이면 페이월
+        if (!mounted) return;
+        final upgraded = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const PaywallScreen(featureName: '영양 기록 저장'),
+          ),
+        );
+        if (upgraded != true) return;
+      }
+    }
+
+    setState(() => _isSaving = true);
+
+    final now = DateTime.now();
+    final record = NutritionRecord(
+      id: '${uid}_${now.millisecondsSinceEpoch}',
+      userId: uid,
+      date: now,
+      mealType: _selectedMealType,
+      foodName: result.foodName,
+      calories: result.calories,
+      protein: result.nutrients.protein,
+      carbs: result.nutrients.carbohydrates,
+      fat: result.nutrients.fat,
+      fiber: result.nutrients.fiber,
+      sugar: result.nutrients.sugar,
+      sodium: result.nutrients.sodium,
+      createdAt: now,
+    );
+
+    try {
+      await ref.read(nutritionRepositoryProvider).saveRecord(record);
+      if (mounted) {
+        setState(() { _saved = true; _isSaving = false; });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('기록이 저장되었습니다!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('저장 실패: $e')),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +126,86 @@ class ResultScreen extends StatelessWidget {
 
             // 설명
             _buildDescriptionCard(context),
+            const SizedBox(height: 16),
+
+            // 기록 저장 영역
+            _buildSaveSection(context),
             const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveSection(BuildContext context) {
+    if (_saved) {
+      return Card(
+        elevation: 0,
+        color: Colors.green.shade50,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green.shade600, size: 28),
+              const SizedBox(width: 12),
+              Text('기록에 저장되었습니다!',
+                  style: TextStyle(
+                      color: Colors.green.shade700,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('이 식사를 기록할까요?',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'breakfast', label: Text('아침')),
+                ButtonSegment(value: 'lunch', label: Text('점심')),
+                ButtonSegment(value: 'dinner', label: Text('저녁')),
+                ButtonSegment(value: 'snack', label: Text('간식')),
+              ],
+              selected: {_selectedMealType},
+              onSelectionChanged: (s) =>
+                  setState(() => _selectedMealType = s.first),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: _isSaving ? null : _saveRecord,
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_alt),
+                label: const Text('기록 저장'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade600,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
           ],
         ),
       ),
